@@ -134,7 +134,10 @@ template <std::floating_point U>
 dolfinx::graph::AdjacencyList<int>
 compute_shared_indices(std::shared_ptr<dolfinx::fem::FunctionSpace<U>> V)
 {
-  return V->dofmap()->index_map->index_to_dest_ranks();
+  std::pair<std::vector<int>, std::vector<std::int32_t>> shared_indices
+      = V->dofmap()->index_map->index_to_dest_ranks();
+  return dolfinx::graph::AdjacencyList<int>(std::move(shared_indices.first),
+                                            std::move(shared_indices.second));
 }
 
 template <std::floating_point U>
@@ -749,8 +752,10 @@ dolfinx_mpc::mpc_data<T> distribute_ghost_data(
   std::span dest_ranks_ghosts = slave_to_ghost->dest();
 
   // Compute number of outgoing slaves and masters for each process
-  dolfinx::graph::AdjacencyList<int> shared_indices
-      = slave_to_ghost->index_to_dest_ranks();
+  auto [im_data, im_offsets] = slave_to_ghost->index_to_dest_ranks();
+  dolfinx::graph::AdjacencyList<int> shared_indices(std::move(im_data),
+                                                    std::move(im_offsets));
+
   const std::size_t num_inc_proc = src_ranks_ghosts.size();
   const std::size_t num_out_proc = dest_ranks_ghosts.size();
   std::vector<std::int32_t> out_num_slaves(num_out_proc + 1, 0);
@@ -1068,6 +1073,8 @@ evaluate_basis_functions(const dolfinx::fem::FunctionSpace<U>& V,
       MDSPAN_IMPL_STANDARD_NAMESPACE::full_extent, 0);
 
   // Reference coordinates for each point
+  std::vector<U> pull_back_scratch(
+      cmap.is_affine() ? 0 : cmap.pull_back_working_size(gdim));
   std::vector<U> Xb(num_points * tdim);
   mdspan2_t X(Xb.data(), num_points, tdim);
 
@@ -1131,7 +1138,7 @@ evaluate_basis_functions(const dolfinx::fem::FunctionSpace<U>& V,
     else
     {
       // Pull-back physical point xp to reference coordinate Xp
-      cmap.pull_back_nonaffine(Xp, xp, coord_dofs, tol, 15);
+      cmap.pull_back_nonaffine(Xp, xp, coord_dofs, pull_back_scratch, tol, 15);
 
       cmap.tabulate(1, std::span(Xpb.data(), tdim), {1, tdim}, phi_b);
       dolfinx::fem::CoordinateElement<U>::compute_jacobian(dphi, coord_dofs,
